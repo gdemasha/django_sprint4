@@ -1,18 +1,15 @@
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.db.models import Count
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
-from django.contrib.auth.mixins import LoginRequiredMixin
-from django.db.models import Count
-from django.views.generic import (
-    DetailView,
-    UpdateView,
-    ListView,
-    CreateView,
-    DeleteView,
-)
+from django.views.generic import (CreateView, DeleteView, DetailView, ListView,
+                                  UpdateView)
 
-from .models import Post, Comment, User, Category
-from .forms import PostForm, CommentForm, ProfileForm
+from blogicum.settings import POSTS_PER_PAGE
+
+from .forms import CommentForm, PostForm, ProfileForm
+from .models import Category, Comment, Post, User
 
 
 class ProfileSuccessUrlMixin:
@@ -20,7 +17,7 @@ class ProfileSuccessUrlMixin:
     def get_success_url(self):
         return reverse(
             'blog:profile',
-            kwargs={"username": self.request.user.username},
+            kwargs={'username': self.request.user.username},
         )
 
 
@@ -29,7 +26,7 @@ class DetailSuccessUrlMixin:
     def get_success_url(self):
         return reverse(
             'blog:post_detail',
-            kwargs={"id": self.kwargs['id']},
+            kwargs={'id': self.kwargs['id']},
         )
 
 
@@ -53,7 +50,7 @@ class PostListView(ListView):
     """Абстрактный CBV для списка публикаций."""
     model = Post
     template_name = None
-    paginate_by = 10
+    paginate_by = POSTS_PER_PAGE
 
     def get_queryset(self):
         posts = Post.objects.select_related(
@@ -61,12 +58,11 @@ class PostListView(ListView):
             'location',
             'author',
         ).filter(
+            pub_date__lte=timezone.now(),
             is_published=True,
             category__is_published=True,
-            pub_date__lte=timezone.now(),
-        ).order_by('-pub_date')
-        queryset = posts.annotate(comment_count=Count('comment'))
-        return queryset
+        ).order_by('-pub_date').annotate(comment_count=Count('comment'))
+        return posts
 
 
 class IndexListView(PostListView):
@@ -175,9 +171,9 @@ class CommentCreateView(
     def form_valid(self, form):
         post = get_object_or_404(
             Post,
+            pub_date__lte=timezone.now(),
             is_published=True,
             category__is_published=True,
-            pub_date__lte=timezone.now(),
             pk=self.kwargs['id']
         )
         form.instance.author = self.request.user
@@ -209,25 +205,23 @@ class ProfileListView(ListView):
     """CBV страницы профиля."""
     model = Post
     template_name = 'blog/profile.html'
-    paginate_by = 10
+    paginate_by = POSTS_PER_PAGE
 
     def get_queryset(self):
         self.author = get_object_or_404(User, username=self.kwargs['username'])
-        queryset = Post.objects.filter(
-            author=self.author,
-        ).order_by('-pub_date')
-        if self.author != self.request.user:
-            queryset = queryset.filter(
-                category__is_published=True,
-                is_published=True,
-                pub_date__lte=timezone.now(),
-            )
-        queryset.select_related(
+        queryset = Post.objects.select_related(
             'location',
             'category',
             'author',
-        )
-        queryset = queryset.annotate(comment_count=Count('comment'))
+        ).filter(
+            author=self.author,
+        ).order_by('-pub_date').annotate(comment_count=Count('comment'))
+        if self.author != self.request.user:
+            queryset = queryset.filter(
+                pub_date__lte=timezone.now(),
+                category__is_published=True,
+                is_published=True,
+            )
         return queryset
 
     def get_context_data(self, **kwargs):
@@ -254,9 +248,29 @@ class PostDetailView(DetailView):
     """CBV для отдельных публикаций."""
     model = Post
     template_name = 'blog/detail.html'
+    pk_url_kwarg = ['id']
 
     def get_object(self, queryset=None):
-        return get_object_or_404(Post, pk=self.kwargs['id'])
+        queryset = Post.objects.select_related(
+            'category',
+            'location',
+            'author',
+        )
+        if self.request.user.is_authenticated:
+            queryset = queryset.filter(
+                pub_date__lte=timezone.now(),
+                is_published=True,
+                category__is_published=True,
+            ) | queryset.filter(
+                author=self.request.user,
+            )
+        else:
+            queryset = queryset.filter(
+                pub_date__lte=timezone.now(),
+                is_published=True,
+                category__is_published=True,
+            )
+        return get_object_or_404(queryset, pk=self.kwargs.get('id'))
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -268,15 +282,3 @@ class PostDetailView(DetailView):
         ).order_by('created_at')
         context['comments'] = comments
         return context
-
-    def dispatch(self, request, *args, **kwargs):
-        post = self.get_object()
-        if self.request.user != post.author:
-            get_object_or_404(
-                Post,
-                pk=self.kwargs['id'],
-                is_published=True,
-                category__is_published=True,
-                pub_date__lte=timezone.now(),
-            )
-        return super().dispatch(request, *args, **kwargs)
