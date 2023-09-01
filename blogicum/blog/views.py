@@ -267,9 +267,9 @@ class PostDetailView(DetailView):
             pk=self.kwargs['id'],
         )
         if self.request.user != post.author and (
-                post.is_published is False or
-                post.category.is_published is False or
-                post.pub_date > timezone.now()
+                post.is_published is False
+                or post.category.is_published is False
+                or post.pub_date > timezone.now()
         ):
             raise Http404
         return post
