@@ -1,15 +1,23 @@
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Count
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils import timezone
-from django.views.generic import (CreateView, DeleteView, DetailView, ListView,
-                                  UpdateView)
-
-from blogicum.settings import POSTS_PER_PAGE
+from django.views.generic import (
+    CreateView,
+    DeleteView,
+    DetailView,
+    ListView,
+    UpdateView,
+)
 
 from .forms import CommentForm, PostForm, ProfileForm
 from .models import Category, Comment, Post, User
+
+
+# Пагинация
+POSTS_PER_PAGE = 10
 
 
 class ProfileSuccessUrlMixin:
@@ -248,37 +256,31 @@ class PostDetailView(DetailView):
     """CBV для отдельных публикаций."""
     model = Post
     template_name = 'blog/detail.html'
-    pk_url_kwarg = ['id']
 
     def get_object(self, queryset=None):
-        queryset = Post.objects.select_related(
-            'category',
-            'location',
-            'author',
+        post = get_object_or_404(
+            Post.objects.select_related(
+                'category',
+                'location',
+                'author',
+            ),
+            pk=self.kwargs['id'],
         )
-        if self.request.user.is_authenticated:
-            queryset = queryset.filter(
-                pub_date__lte=timezone.now(),
-                is_published=True,
-                category__is_published=True,
-            ) | queryset.filter(
-                author=self.request.user,
-            )
-        else:
-            queryset = queryset.filter(
-                pub_date__lte=timezone.now(),
-                is_published=True,
-                category__is_published=True,
-            )
-        return get_object_or_404(queryset, pk=self.kwargs.get('id'))
+        if self.request.user != post.author and (
+                post.is_published is False or
+                post.category.is_published is False or
+                post.pub_date > timezone.now()
+        ):
+            raise Http404
+        return post
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['form'] = CommentForm()
-        comments = Comment.objects.select_related(
-            'author',
-        ).filter(
-            post=self.object,
-        ).order_by('created_at')
-        context['comments'] = comments
+        context['comments'] = (
+            Comment.objects
+            .select_related('author')
+            .filter(post=self.object)
+            .order_by('created_at')
+        )
         return context
